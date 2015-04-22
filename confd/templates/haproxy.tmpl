@@ -1,0 +1,64 @@
+global
+  log /dev/log local0
+  maxconn 65536
+  user proxy
+  group proxy
+  tune.ssl.default-dh-param 2048
+  ssl-default-bind-ciphers ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:DHE-RSA-AES256-SHA:!NULL:!aNULL:!RC4:!RC2:!MEDIUM:!LOW:!EXPORT:!DES:!MD5:!PSK:!3DES
+  daemon
+  pidfile /var/run/haproxy.pid
+
+defaults
+  log global
+  mode http
+  option httplog
+  option dontlognull
+  option forwardfor
+  option http-server-close
+  timeout connect 5s
+  timeout client 300s
+  timeout server 300s
+
+frontend http-in
+  bind *:80
+  bind *:443 ssl crt /etc/ssl/private/ssl.pem
+  redirect scheme https if !{ ssl_fc }
+  {{range $backend := lsdir "/services/haproxy/backends"}}
+  {{$acl := printf "/services/haproxy/backends/%s/acl" $backend}}
+  {{if exists $acl}}
+  use_backend {{$backend}} if { {{getv $acl}} }
+  {{end}}
+  {{end}}
+  {{range $redirect := ls "/services/haproxy/redirects"}}
+  {{$acl := printf "/services/haproxy/redirects/%s/acl" $redirect}}
+  {{if exists $acl}}
+  redirect prefix https://{{$redirect}} code 301 if { {{getv $acl}} }
+  {{end}}
+  {{end}}
+  {{if exists "/services/haproxy/default_backend"}}
+  {{$backend := getv "/services/haproxy/default_backend"}}
+  {{$servers := printf "/services/haproxy/backends/%s/servers" $backend}}
+  {{with $servers}}
+  default_backend {{$backend}}
+  {{end}}
+  {{end}}
+
+{{range $backend := lsdir "/services/haproxy/backends"}}
+backend {{$backend}}
+  {{$sticky := printf "/services/haproxy/backends/%s/sticky" $backend}}
+  {{if exists $sticky}}
+  balance leastconn
+  cookie JSESSIONID insert nocache
+  {{end}}
+  compression algo gzip
+  compression type text/plain text/css application/json application/javascript application/x-javascript text/javascript text/xml application/xml application/rss+xml application/atom+xml application/rdf+xml
+  {{$servers := printf "/services/haproxy/backends/%s/servers" $backend}}
+  {{range $server := ls $servers}}
+  {{$path := printf "/services/haproxy/backends/%s/servers/%s" $backend $server}}
+  {{if exists $sticky}}
+  server {{$server}} {{getv $path}} cookie {{$server}}
+  {{else}}
+  server {{$server}} {{getv $path}}
+  {{end}}
+  {{end}}
+{{end}}
